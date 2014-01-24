@@ -60,8 +60,8 @@ unsigned int hardware_concurrency()
 }
 
 
-std::atomic_long p_pipe;
-std::atomic_long c_pipe;
+std::atomic_ulong p_pipe;
+std::atomic_ulong c_pipe;
 
 std::atomic_bool barrier;
 
