@@ -68,24 +68,31 @@ std::atomic_bool barrier;
 const char * const BOLD  = "\E[1m";
 const char * const RESET = "\E[0m";
 
-
-int
-main(int, char *[])
+enum class EShema
 {
-    const size_t core  = hardware_concurrency();
-    const size_t trans = 10000000;
+    Classic,
+    PingPong,
+    BigBang
+};
 
-    std::vector<double> TS(core*core);
+int main( int argc, char* argv[] )
+{
+    const EShema schema = (argc<2)?EShema::Classic : argv[1][0]=='c'?EShema::Classic : argv[1][0]=='b'?EShema::BigBang : EShema::PingPong;
+    const size_t trans  = (argc<3)?10000000 : std::atoll(argv[2]);
+    const size_t ways   = (argc<4)?10       : std::atoll(argv[3]);
+    const size_t cores  = hardware_concurrency();
+
+    std::vector<double> TS(cores*cores);
 
     std::cout << "SpeedCore: running..." << std::endl;
 
-    for(size_t i = 0; i < (core-1); i++)
+    for(size_t i = 0; i < (cores-1); i++)
     {
-        for(size_t j = i+1; j < core; j++)
+        for(size_t j = i+1; j < cores; j++)
         {
-            int n = i*core+j;
+            int n = i*cores+j;
 
-            std::cout << "\rRunning test " << (i+1) << "/" << core << " " << "/-\\|"[n&3] << std::flush;
+            std::cout << "\rRunning test " << (i+1) << "/" << cores << " " << "/-\\|"[n&3] << std::flush;
 
             p_pipe.store(0);
             c_pipe.store(0);
@@ -94,23 +101,43 @@ main(int, char *[])
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-            std::thread c ([] {
-                while (barrier.load(std::memory_order_acquire)) 
+            auto classic_c =  [trans] {
+                while (barrier.load(std::memory_order_acquire))
                 {}
                 for(unsigned int i = 1; i < trans; i++)
                 {
                     p_pipe.store(i, std::memory_order_release);
                     while (c_pipe.load(std::memory_order_acquire) != i)
                     {}
-                }});
-
-            std::thread p ([] {
+                }};
+            auto classic_p = [trans] {
                 for(unsigned int i = 1; i < trans; i++)
                 {
                     while(p_pipe.load(std::memory_order_acquire) != i)
                     {}
                     c_pipe.store(i,std::memory_order_release);
-                }});
+                }};
+
+            // TODO: change pingpong to use SC/SP CLF queues
+            auto pingpong_c =  [trans] {
+                while (barrier.load(std::memory_order_acquire))
+                {}
+                for(unsigned int i = 1; i < trans; i++)
+                {
+                    p_pipe.store(i, std::memory_order_release);
+                    while (c_pipe.load(std::memory_order_acquire) != i)
+                    {}
+                }};
+            auto pingpong_p = [trans] {
+                for(unsigned int i = 1; i < trans; i++)
+                {
+                    while(p_pipe.load(std::memory_order_acquire) != i)
+                    {}
+                    c_pipe.store(i,std::memory_order_release);
+                }};
+
+            std::thread c = schema==EShema::Classic ? std::thread(classic_c) : std::thread(pingpong_c);
+            std::thread p = schema==EShema::Classic ? std::thread(classic_p) : std::thread(pingpong_p);
 
             set_affinity(c, i);
             set_affinity(p, j);
@@ -137,20 +164,20 @@ main(int, char *[])
     }
 
     std::cout << "\nMax speed " << (max_*2) << " T/S (core " << 
-                    std::distance(TS.begin(), it)/core << " <-> " << 
-                    std::distance(TS.begin(), it)%core << ")" << std::endl;
+                    std::distance(TS.begin(), it)/cores << " <-> " <<
+                    std::distance(TS.begin(), it)%cores << ")" << std::endl;
 
     std::cout << "*\t";
-    for(size_t i = 0; i < core; i++) {
+    for(size_t i = 0; i < cores; i++) {
         std::cout << i << '\t';
     }
     std::cout << std::endl;
 
-    for(size_t i = 0; i < core; i++) {
+    for(size_t i = 0; i < cores; i++) {
         std::cout << i  << '\t';
-        for(size_t j = 0; j < core; j++)
+        for(size_t j = 0; j < cores; j++)
         {
-            auto & elem = TS[i * core + j];
+            auto & elem = TS[i * cores + j];
             if (elem != 0.0) {
                 if (elem >  0.96)
                     std::cout << BOLD;
